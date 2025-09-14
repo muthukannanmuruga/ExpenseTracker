@@ -10,7 +10,6 @@ OUTPUT_XLSX = "Personal_Expense_Tracker.xlsx"
 # Helpers
 # =========================
 def ensure_xlsx(file_path: str) -> str:
-    """Convert .xls to .xlsx if needed."""
     base, ext = os.path.splitext(file_path)
     if ext.lower() == ".xls":
         new_path = base + ".xlsx"
@@ -21,39 +20,53 @@ def ensure_xlsx(file_path: str) -> str:
     return file_path
 
 def to_num(x):
-    if pd.isna(x): return np.nan
+    if pd.isna(x): 
+        return np.nan
     s = str(x).strip().replace(",", "")
-    if s == "": return np.nan
+    if s == "":
+        return np.nan
     if re.fullmatch(r"\(.*\)", s):
-        try: return -float(s.strip("()"))
-        except: return np.nan
+        try: 
+            return -float(s.strip("()"))
+        except: 
+            return np.nan
     s = s.replace("Dr", "").replace("CR", "").replace("Cr", "").strip()
-    try: return float(s)
-    except: return np.nan
+    try: 
+        return float(s)
+    except: 
+        return np.nan
 
 def parse_date(x):
-    """Robust date parser (handles dd,mm,yyyy)."""
-    if pd.isna(x): return pd.NaT
-    if isinstance(x, (datetime, np.datetime64)): return pd.to_datetime(x)
+    if pd.isna(x): 
+        return pd.NaT
+    if isinstance(x, (datetime, np.datetime64)): 
+        return pd.to_datetime(x)
 
     s = str(x).strip()
     s_norm = s.replace(",", "-").replace(".", "-").replace("/", "-")
-    fmts = ["%d,%m,%Y","%d,%m,%y","%d-%m-%Y","%d-%m-%y",
-            "%d/%m/%Y","%d/%m/%y","%d.%m.%Y","%d.%m.%y",
-            "%d %b %Y","%d-%b-%Y","%Y-%m-%d"]
+    fmts = [
+        "%d,%m,%Y","%d,%m,%y","%d-%m-%Y","%d-%m-%y",
+        "%d/%m/%Y","%d/%m/%y","%d.%m.%Y","%d.%m.%y",
+        "%d %b %Y","%d-%b-%Y","%Y-%m-%d"
+    ]
     for fmt in fmts:
         try:
             src = s if "%," in fmt else s_norm
             return datetime.strptime(src, fmt)
-        except: pass
+        except:
+            pass
     return pd.to_datetime(s, errors="coerce", dayfirst=True)
 
 def detect_bank(file_name: str) -> str:
     name = file_name.lower()
-    if "optransactionhistory" in name or "icici" in name: return "ICICI"
-    if "918010053388907" in name or "axis" in name: return "AXIS"
-    if "3895" in name: return "HDFC1"
-    if "7671" in name: return "HDFC2"
+    if "optransactionhistory" in name or "icici" in name:
+        return "ICICI"
+    if "918010053388907" in name or "axis" in name:
+        return "AXIS"
+    if "3895" in name:
+        return "HDFC1"
+    if "7671" in name:
+        return "HDFC2"
     return "UNKNOWN"
 
 # =========================
@@ -134,84 +147,128 @@ def parse_file(path, logs):
     bank = detect_bank(os.path.basename(path))
     print(f"Parsing {os.path.basename(path)} as {bank}...")
     try:
-        if bank=="AXIS": df = parse_axis(path)
-        elif bank in ("HDFC1","HDFC2"): df = parse_hdfc(path)
-        elif bank=="ICICI": df = parse_icici(path)
-        else: df = parse_fallback(path, bank)
+        if bank == "AXIS":
+            df = parse_axis(path)
+        elif bank in ("HDFC1","HDFC2"):
+            df = parse_hdfc(path)
+        elif bank == "ICICI":
+            df = parse_icici(path)
+        else:
+            df = parse_fallback(path, bank)
     except Exception as e:
         print(f"Schema parser failed for {bank}: {e}")
         df = parse_fallback(path, bank)
 
-    # Clean
     df["Date"] = df["Date"].apply(parse_date)
     df["Debit"] = df["Debit"].apply(to_num)
     df["Credit"] = df["Credit"].apply(to_num)
     df["Balance"] = df["Balance"].apply(to_num)
     df["Bank"] = bank
 
-    before=len(df)
-    df=df.dropna(subset=["Date"])
-    after=len(df)
-    logs.append({"File": os.path.basename(path),"Bank":bank,"RowsParsed":after,"RowsDropped":before-after})
+    before = len(df)
+    df = df.dropna(subset=["Date"])
+    after = len(df)
+    logs.append({
+        "File": os.path.basename(path),
+        "Bank": bank,
+        "RowsParsed": after,
+        "RowsDropped": before - after
+    })
     return df
+
+# =========================
+# Category + SubCategory
+# =========================
+CATEGORY_MAP = {
+    "Groceries": ["Fruits","Vegetables","Dairy","Snacks"],
+    "Dining": ["Restaurants","Takeaway","Cafe"],
+    "Shopping": ["Clothes","Electronics","Online"],
+    "Utilities": ["Electricity","Water","Gas","Internet"],
+    "Transport": ["Fuel","Taxi","Bus/Train"],
+    "Investments": ["Stocks","Mutual Funds","Bonds"],
+    "Insurance": ["Health","Life","Vehicle"],
+    "Other": ["Miscellaneous"]
+}
 
 # =========================
 # Dashboard
 # =========================
-CATEGORY_LIST = ["Groceries","Dining","Shopping","Utilities","Rent/Home",
-                 "Transport","Fees/Charges","Salary","Transfers",
-                 "Investments","Insurance","Interest","Income-Other","Expense-Other"]
-
 def build_dashboard(consolidated, logs, output_path):
     consolidated = consolidated.sort_values("Date").reset_index(drop=True)
 
-    consolidated["Type"] = np.where(consolidated["Debit"].fillna(0)>0,"Expense",
-                                    np.where(consolidated["Credit"].fillna(0)>0,"Income","Other"))
-    consolidated["Amount"] = consolidated["Credit"].fillna(0)-consolidated["Debit"].fillna(0)
+    consolidated["Type"] = np.where(consolidated["Debit"].fillna(0) > 0, "Expense",
+                                    np.where(consolidated["Credit"].fillna(0) > 0, "Income", "Other"))
+    consolidated["Amount"] = consolidated["Credit"].fillna(0) - consolidated["Debit"].fillna(0)
     consolidated["Month"] = consolidated["Date"].dt.strftime("%b-%Y")
 
-    # Insert Category column after Description
+    # Insert Category + SubCategory
     cols = list(consolidated.columns)
-    insert_at = cols.index("Description")+1
-    consolidated.insert(insert_at,"Category","")
+    insert_at = cols.index("Description") + 1
+    consolidated.insert(insert_at, "Category", "")
+    consolidated.insert(insert_at + 1, "SubCategory", "")
 
-    summary_cat = consolidated.pivot_table(index="Category",columns="Type",values="Amount",aggfunc="sum",fill_value=0).reset_index()
-    summary_month = (consolidated.groupby(["Month","Type"],as_index=False)["Amount"]
-                     .sum().pivot(index="Month",columns="Type",values="Amount").fillna(0).reset_index())
     log_df = pd.DataFrame(logs)
 
-    with pd.ExcelWriter(output_path,engine="xlsxwriter",datetime_format="dd-mmm-yyyy") as writer:
-        consolidated.to_excel(writer,"Transactions",index=False)
-        summary_cat.to_excel(writer,"Summary_By_Category",index=False)
-        summary_month.to_excel(writer,"Summary_By_Month",index=False)
-        pd.DataFrame([{"Category":c} for c in CATEGORY_LIST]).to_excel(writer,"Category_List",index=False)
-        log_df.to_excel(writer,"Parse_Log",index=False)
+    with pd.ExcelWriter(output_path, engine="xlsxwriter", datetime_format="dd-mmm-yyyy") as writer:
+        consolidated.to_excel(writer, sheet_name="Transactions", index=False)
 
-        wb=writer.book
-        ws_t=writer.sheets["Transactions"]
+        # Write Category and SubCategory lists
+        pd.DataFrame([{"Category": c} for c in CATEGORY_MAP.keys()]).to_excel(writer, sheet_name="Category_List", index=False)
+        subcat_rows = []
+        for cat, subs in CATEGORY_MAP.items():
+            for s in subs:
+                subcat_rows.append({"Category": cat, "SubCategory": s})
+        pd.DataFrame(subcat_rows).to_excel(writer, sheet_name="SubCategory_List", index=False)
 
-        # Dropdown validation for Category column
-        dv_range=f"Category_List!$A$2:$A${len(CATEGORY_LIST)+1}"
-        last_row=len(consolidated)+1
-        ws_t.data_validation(1,insert_at,last_row,insert_at,{
-            "validate":"list",
-            "source":dv_range,
-            "input_message":"Pick category"
+        log_df.to_excel(writer, sheet_name="Parse_Log", index=False)
+
+        # Excel objects
+        wb = writer.book
+        ws_t = writer.sheets["Transactions"]
+
+        # Category dropdown
+        dv_range = f"Category_List!$A$2:$A${len(CATEGORY_MAP)+1}"
+        last_row = len(consolidated) + 1
+        ws_t.data_validation(1, insert_at, last_row, insert_at, {
+            "validate": "list",
+            "source": dv_range,
+            "input_message": "Pick Category"
         })
+
+        # SubCategory dropdown depends on Category using INDIRECT
+        for r in range(2, last_row+1):
+            formula = f"=INDIRECT(SUBSTITUTE($C{r},\" \",\"_\"))"
+            ws_t.data_validation(r-1, insert_at+1, r-1, insert_at+1, {
+                "validate": "list",
+                "source": formula,
+                "input_message": "Pick SubCategory"
+            })
+
+        # Create named ranges for each category
+        ws_sub = writer.sheets["SubCategory_List"]
+        row_start = 2
+        for cat, subs in CATEGORY_MAP.items():
+            row_end = row_start + len(subs) - 1
+            name = cat.replace(" ", "_")
+            wb.define_name(f"{name}", f"=SubCategory_List!$B${row_start}:$B${row_end}")
+            row_start = row_end + 1
 
 # =========================
 # Main
 # =========================
 def main():
-    files=[f for f in os.listdir(".") if f.lower().endswith((".xls",".xlsx")) and f!=OUTPUT_XLSX and not f.startswith("~$")]
-    frames,logs=[],[]
+    files = [f for f in os.listdir(".") if f.lower().endswith((".xls",".xlsx")) and f != OUTPUT_XLSX and not f.startswith("~$")]
+    frames, logs = [], []
     for f in files:
-        try: frames.append(parse_file(f,logs))
-        except Exception as e: print(f"Skipping {f}: {e}")
-    if not frames: return
-    consolidated=pd.concat(frames,ignore_index=True)
-    build_dashboard(consolidated,logs,OUTPUT_XLSX)
+        try:
+            frames.append(parse_file(f, logs))
+        except Exception as e:
+            print(f"Skipping {f}: {e}")
+    if not frames:
+        return
+    consolidated = pd.concat(frames, ignore_index=True)
+    build_dashboard(consolidated, logs, OUTPUT_XLSX)
     print(f"Saved -> {OUTPUT_XLSX}")
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
